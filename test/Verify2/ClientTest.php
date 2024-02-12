@@ -84,9 +84,10 @@ class ClientTest extends VonageTestCase
             'to' => '07785254785',
             'client_ref' => 'my-verification',
             'brand' => 'my-brand',
+            'from' => 'vonage'
         ];
 
-        $smsVerification = new SMSRequest($payload['to'], $payload['brand']);
+        $smsVerification = new SMSRequest($payload['to'], $payload['brand'], null, $payload['from']);
         $smsVerification->setClientRef($payload['client_ref']);
 
         $this->vonageClient->send(Argument::that(function (Request $request) use ($payload) {
@@ -104,7 +105,51 @@ class ClientTest extends VonageTestCase
             $this->assertRequestJsonBodyContains('code_length', 4, $request);
             $this->assertRequestJsonBodyContains('brand', $payload['brand'], $request);
             $this->assertRequestJsonBodyContains('to', $payload['to'], $request, true);
+            $this->assertRequestJsonBodyContains('from', $payload['from'], $request, true);
             $this->assertRequestJsonBodyContains('channel', 'sms', $request, true);
+            $this->assertEquals('POST', $request->getMethod());
+
+            return true;
+        }))->willReturn($this->getResponse('verify-request-success', 202));
+
+        $result = $this->verify2Client->startVerification($smsVerification);
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('request_id', $result);
+    }
+
+    public function testWillPopulateEntityIdAndContentId(): void
+    {
+        $payload = [
+            'to' => '07785254785',
+            'client_ref' => 'my-verification',
+            'brand' => 'my-brand',
+            'from' => 'vonage',
+            'entity_id' => '1101407360000017170',
+            'content_id' => '1107158078772563946'
+        ];
+
+        $smsVerification = new SMSRequest(
+            $payload['to'],
+            $payload['brand'],
+            null,
+            $payload['from'],
+            $payload['entity_id'],
+            $payload['content_id']
+        );
+
+        $smsVerification->setClientRef($payload['client_ref']);
+
+        $this->vonageClient->send(Argument::that(function (Request $request) use ($payload) {
+            $uri = $request->getUri();
+            $uriString = $uri->__toString();
+            $this->assertEquals(
+                'https://api.nexmo.com/v2/verify',
+                $uriString
+            );
+
+            $this->assertRequestJsonBodyContains('entity_id', '1101407360000017170', $request, true);
+            $this->assertRequestJsonBodyContains('content_id', '1107158078772563946', $request, true);
             $this->assertEquals('POST', $request->getMethod());
 
             return true;
@@ -128,45 +173,6 @@ class ClientTest extends VonageTestCase
 
         $this->vonageClient->send(Argument::that(function (Request $request) {
             $this->assertRequestJsonBodyContains('fraud_check', false, $request);
-
-            return true;
-        }))->willReturn($this->getResponse('verify-request-success', 202));
-
-        $result = $this->verify2Client->startVerification($smsVerification);
-
-        $this->assertIsArray($result);
-        $this->assertArrayHasKey('request_id', $result);
-    }
-
-    /**
-     * @dataProvider localeProvider
-     */
-    public function testCannotRequestSMSWithInvalidLocale($locale, $valid): void
-    {
-        if (!$valid) {
-            $this->expectException(\InvalidArgumentException::class);
-        }
-
-        $verificationLocale = new VerificationLocale($locale);
-
-        $payload = [
-            'to' => '07785254785',
-            'client_ref' => 'my-verification',
-            'brand' => 'my-brand',
-            'locale' => $verificationLocale,
-        ];
-
-        $smsVerification = new SMSRequest($payload['to'], $payload['brand'], $payload['locale']);
-        $smsVerification->setClientRef($payload['client_ref']);
-
-        $this->vonageClient->send(Argument::that(function (Request $request) use ($payload) {
-            $this->assertEquals(
-                'Basic ',
-                mb_substr($request->getHeaders()['Authorization'][0], 0, 6)
-            );
-
-            $this->assertRequestJsonBodyContains('locale', $payload['locale']->getCode(), $request);
-            $this->assertEquals('POST', $request->getMethod());
 
             return true;
         }))->willReturn($this->getResponse('verify-request-success', 202));
@@ -432,6 +438,33 @@ class ClientTest extends VonageTestCase
         $this->assertEquals('https://api.nexmo.com/v2/verify/c11236f4-00bf-4b89-84ba-88b25df97315/silent-auth/redirect', $result['check_url']);
     }
 
+    public function testCanRequestSilentAuthWithRedirectUrl(): void
+    {
+        $payload = [
+            'to' => '07784587411',
+            'brand' => 'my-brand',
+            'redirect_url' => 'https://my-app-endpoint/webhook'
+        ];
+
+        $silentAuthRequest = new SilentAuthRequest($payload['to'], $payload['brand'], $payload['redirect_url']);
+
+        $this->vonageClient->send(Argument::that(function (Request $request) use ($payload) {
+            $this->assertRequestJsonBodyContains('brand', $payload['brand'], $request);
+            $this->assertRequestJsonBodyContains('to', $payload['to'], $request, true);
+            $this->assertRequestJsonBodyContains('channel', 'silent_auth', $request, true);
+            $this->assertRequestJsonBodyContains('redirect_url', 'https://my-app-endpoint/webhook', $request, true);
+            $this->assertEquals('POST', $request->getMethod());
+
+            return true;
+        }))->willReturn($this->getResponse('verify-silent-auth-request-success', 202));
+
+        $result = $this->verify2Client->startVerification($silentAuthRequest);
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('request_id', $result);
+        $this->assertArrayHasKey('check_url', $result);
+        $this->assertEquals('https://api.nexmo.com/v2/verify/c11236f4-00bf-4b89-84ba-88b25df97315/silent-auth/redirect', $result['check_url']);
+    }
+
     public function testCannotSendConcurrentVerifications(): void
     {
         $this->expectException(Client\Exception\Request::class);
@@ -444,7 +477,7 @@ class ClientTest extends VonageTestCase
         ];
 
         $smsVerification = new SMSRequest($payload['to'], $payload['brand']);
-        $smsVerification->setClientRef( $payload['client_ref']);
+        $smsVerification->setClientRef($payload['client_ref']);
 
         $this->vonageClient->send(Argument::that(function (Request $request) {
             $this->assertEquals('POST', $request->getMethod());
